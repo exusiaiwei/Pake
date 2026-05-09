@@ -11,6 +11,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: claude-chatgpt-build
+  cancel-in-progress: true
+
 env:
   NODE_VERSION: "22"
   PNPM_VERSION: "10.26.2"
@@ -23,7 +27,7 @@ env:
 
 jobs:
   build-windows:
-    name: Build ChatGPT (Windows)
+    name: Build ChatGPT (Windows portable .exe)
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -43,7 +47,7 @@ jobs:
       - name: Build Pake CLI
         run: pnpm run cli:build
 
-      - name: Build ChatGPT MSI
+      - name: Build ChatGPT (Tauri produces both .exe and .msi; we keep the .exe)
         shell: pwsh
         run: |
           $cliArgs = @(
@@ -64,66 +68,64 @@ jobs:
 
           New-Item -Path "output\windows" -ItemType Directory -Force | Out-Null
 
-          $candidates = @(
-            "${env:APP_TITLE}.msi",
-            "${env:APP_NAME}.msi"
-          )
+          # Pake sets mainBinaryName = "pake-<lowercased-alnum-name>", so the
+          # raw Tauri binary lives at target/<triple>/release/pake-chatgpt.exe.
+          $releaseDir = "src-tauri\target\x86_64-pc-windows-msvc\release"
+          $primaryExe = Join-Path $releaseDir "pake-chatgpt.exe"
 
-          $found = $null
-          foreach ($candidate in $candidates) {
-            if (Test-Path $candidate) {
-              $found = $candidate
-              break
+          $exePath = $null
+          if (Test-Path $primaryExe) {
+            $exePath = $primaryExe
+          } else {
+            # Fallback: scan release dir (top level only, ignore deps/build subdirs)
+            $candidates = Get-ChildItem -Path $releaseDir -Filter "*.exe" -File -ErrorAction SilentlyContinue
+            $candidates = $candidates | Where-Object {
+              $_.Name -notmatch '^(build-script|.*-[0-9a-f]{16,})\.exe$'
+            }
+            if ($candidates) {
+              $exePath = $candidates[0].FullName
             }
           }
 
-          if (-not $found) {
-            $msiFiles = Get-ChildItem -Path "src-tauri\target\x86_64-pc-windows-msvc\release\bundle\msi\*.msi" -ErrorAction SilentlyContinue
-            if (-not $msiFiles) {
-              $msiFiles = Get-ChildItem -Path "src-tauri\target\release\bundle\msi\*.msi" -ErrorAction SilentlyContinue
-            }
-            if ($msiFiles) {
-              $found = $msiFiles[0].FullName
-            }
-          }
-
-          if (-not $found) {
-            Write-Error "No MSI files produced. Searched:"
-            Write-Host "  - ${env:APP_TITLE}.msi (project root)"
-            Write-Host "  - ${env:APP_NAME}.msi (project root)"
-            Write-Host "  - src-tauri\target\x86_64-pc-windows-msvc\release\bundle\msi\"
-            Write-Host "  - src-tauri\target\release\bundle\msi\"
-            Write-Host "All MSI files under src-tauri\target:"
-            Get-ChildItem -Path "src-tauri\target\" -Recurse -Filter "*.msi" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName }
+          if (-not $exePath) {
+            Write-Error "Could not locate compiled .exe in $releaseDir"
+            Write-Host "Top-level .exe files in release dir:"
+            Get-ChildItem -Path $releaseDir -Filter "*.exe" -File -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)  ($([math]::Round($_.Length / 1MB, 2)) MB)" }
             exit 1
           }
 
-          $destination = "output\windows\${env:APP_TITLE}_x64.msi"
-          Move-Item -Path $found -Destination $destination -Force
-          Write-Host "Final MSI: $destination"
+          $destination = "output\windows\${env:APP_TITLE}.exe"
+          Copy-Item -Path $exePath -Destination $destination -Force
+          $sizeMB = [math]::Round((Get-Item $destination).Length / 1MB, 2)
+          Write-Host "Portable EXE ready: $destination ($sizeMB MB)"
 
           git checkout -- src-tauri/Cargo.lock
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v6
         with:
-          name: ChatGPT-windows
-          path: output/windows/*.msi
+          name: ChatGPT-windows-portable
+          path: output/windows/*.exe
           retention-days: 7
 
       - name: Publish GitHub Release
         uses: ncipollo/release-action@v1
         with:
           tag: ${{ env.RELEASE_TAG }}
-          name: ChatGPT (Claude auto-build)
+          name: ChatGPT (portable, Claude auto-build)
           body: |
-            Automated Pake build of ChatGPT for Windows.
+            Portable Pake build of ChatGPT for Windows. Drop `ChatGPT.exe` into any folder and run it directly — no installation needed.
 
+            **Setup tip:** put it in your PATH-registered tools folder to launch from terminal.
+
+            **Requires:** Microsoft Edge WebView2 Runtime (preinstalled on Windows 10 21H2+ and Windows 11; if missing, install the evergreen bootstrapper from https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
+
+            ---
             - Source URL: ${{ env.APP_URL }}
             - Window size: ${{ env.APP_WIDTH }}x${{ env.APP_HEIGHT }}
             - Built from commit ${{ github.sha }}
             - Workflow run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           allowUpdates: true
           replacesArtifacts: true
-          artifacts: "output/windows/*.msi"
+          artifacts: "output/windows/*.exe"
           token: ${{ secrets.GITHUB_TOKEN }}
