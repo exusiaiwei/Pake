@@ -1,0 +1,129 @@
+name: Build ChatGPT Windows (Claude)
+
+on:
+  push:
+    branches:
+      - claude/pake-exe-builder-evaluation-las7e
+    paths:
+      - ".github/workflows/claude-chatgpt-build.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "10.26.2"
+  APP_NAME: chatgpt
+  APP_TITLE: ChatGPT
+  APP_URL: https://chatgpt.com/
+  APP_WIDTH: "1200"
+  APP_HEIGHT: "780"
+  RELEASE_TAG: claude-chatgpt-build
+
+jobs:
+  build-windows:
+    name: Build ChatGPT (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable-x86_64-msvc
+
+      - name: Setup Node.js Environment
+        uses: ./.github/actions/setup-env
+        with:
+          mode: build
+
+      - name: Build Pake CLI
+        run: pnpm run cli:build
+
+      - name: Build ChatGPT MSI
+        shell: pwsh
+        run: |
+          $cliArgs = @(
+            "${env:APP_URL}",
+            "--name", "${env:APP_TITLE}",
+            "--width", "${env:APP_WIDTH}",
+            "--height", "${env:APP_HEIGHT}",
+            "--targets", "x64"
+          )
+
+          $iconPath = "src-tauri\png\${env:APP_NAME}_256.ico"
+          if (Test-Path $iconPath) {
+            $cliArgs += @("--icon", $iconPath)
+          }
+
+          Write-Host "Running: node dist/cli.js $cliArgs"
+          node dist/cli.js @cliArgs
+
+          New-Item -Path "output\windows" -ItemType Directory -Force | Out-Null
+
+          $candidates = @(
+            "${env:APP_TITLE}.msi",
+            "${env:APP_NAME}.msi"
+          )
+
+          $found = $null
+          foreach ($candidate in $candidates) {
+            if (Test-Path $candidate) {
+              $found = $candidate
+              break
+            }
+          }
+
+          if (-not $found) {
+            $msiFiles = Get-ChildItem -Path "src-tauri\target\x86_64-pc-windows-msvc\release\bundle\msi\*.msi" -ErrorAction SilentlyContinue
+            if (-not $msiFiles) {
+              $msiFiles = Get-ChildItem -Path "src-tauri\target\release\bundle\msi\*.msi" -ErrorAction SilentlyContinue
+            }
+            if ($msiFiles) {
+              $found = $msiFiles[0].FullName
+            }
+          }
+
+          if (-not $found) {
+            Write-Error "No MSI files produced. Searched:"
+            Write-Host "  - ${env:APP_TITLE}.msi (project root)"
+            Write-Host "  - ${env:APP_NAME}.msi (project root)"
+            Write-Host "  - src-tauri\target\x86_64-pc-windows-msvc\release\bundle\msi\"
+            Write-Host "  - src-tauri\target\release\bundle\msi\"
+            Write-Host "All MSI files under src-tauri\target:"
+            Get-ChildItem -Path "src-tauri\target\" -Recurse -Filter "*.msi" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName }
+            exit 1
+          }
+
+          $destination = "output\windows\${env:APP_TITLE}_x64.msi"
+          Move-Item -Path $found -Destination $destination -Force
+          Write-Host "Final MSI: $destination"
+
+          git checkout -- src-tauri/Cargo.lock
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ChatGPT-windows
+          path: output/windows/*.msi
+          retention-days: 7
+
+      - name: Publish GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ env.RELEASE_TAG }}
+          name: ChatGPT (Claude auto-build)
+          body: |
+            Automated Pake build of ChatGPT for Windows.
+
+            - Source URL: ${{ env.APP_URL }}
+            - Window size: ${{ env.APP_WIDTH }}x${{ env.APP_HEIGHT }}
+            - Built from commit ${{ github.sha }}
+            - Workflow run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          allowUpdates: true
+          replacesArtifacts: true
+          artifacts: "output/windows/*.msi"
+          token: ${{ secrets.GITHUB_TOKEN }}
