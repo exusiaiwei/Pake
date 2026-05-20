@@ -15,123 +15,20 @@ concurrency:
   group: claude-kook-build
   cancel-in-progress: true
 
-env:
-  NODE_VERSION: "22"
-  PNPM_VERSION: "10.26.2"
-  APP_NAME: kook
-  APP_TITLE: KOOK
-  # Land directly on /app/channels/ so the user doesn't have to click through
-  # the marketing page on every cold start.
-  APP_URL: https://www.kookapp.cn/app/channels/
-  APP_WIDTH: "1280"
-  APP_HEIGHT: "820"
-  RELEASE_TAG: claude-kook-build
-
 jobs:
-  build-windows:
+  build:
     name: Build KOOK (Windows portable .exe)
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/pake-windows-build
         with:
-          toolchain: stable-x86_64-msvc
-
-      - name: Setup Node.js Environment
-        uses: ./.github/actions/setup-env
-        with:
-          mode: build
-
-      - name: Build Pake CLI
-        run: pnpm run cli:build
-
-      - name: Build KOOK
-        shell: pwsh
-        run: |
-          # --new-window keeps OAuth / popup login flows inside the app,
-          # but external links shared in chat still open in the system browser.
-          $cliArgs = @(
-            "${env:APP_URL}",
-            "--name", "${env:APP_TITLE}",
-            "--width", "${env:APP_WIDTH}",
-            "--height", "${env:APP_HEIGHT}",
-            "--targets", "x64",
-            "--new-window"
-          )
-
-          $iconPath = "src-tauri\png\${env:APP_NAME}_256.ico"
-          if (Test-Path $iconPath) {
-            $cliArgs += @("--icon", $iconPath)
-          }
-
-          Write-Host "Running: node dist/cli.js $cliArgs"
-          node dist/cli.js @cliArgs
-
-          New-Item -Path "output\windows" -ItemType Directory -Force | Out-Null
-
-          # Pake sets mainBinaryName = "pake-<lowercased-alnum-name>", so the
-          # raw Tauri binary lives at target/<triple>/release/pake-kook.exe.
-          $releaseDir = "src-tauri\target\x86_64-pc-windows-msvc\release"
-          $primaryExe = Join-Path $releaseDir "pake-kook.exe"
-
-          $exePath = $null
-          if (Test-Path $primaryExe) {
-            $exePath = $primaryExe
-          } else {
-            $candidates = Get-ChildItem -Path $releaseDir -Filter "*.exe" -File -ErrorAction SilentlyContinue
-            $candidates = $candidates | Where-Object {
-              $_.Name -notmatch '^(build-script|.*-[0-9a-f]{16,})\.exe$'
-            }
-            if ($candidates) {
-              $exePath = $candidates[0].FullName
-            }
-          }
-
-          if (-not $exePath) {
-            Write-Error "Could not locate compiled .exe in $releaseDir"
-            Get-ChildItem -Path $releaseDir -Filter "*.exe" -File -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)  ($([math]::Round($_.Length / 1MB, 2)) MB)" }
-            exit 1
-          }
-
-          $destination = "output\windows\${env:APP_TITLE}.exe"
-          Copy-Item -Path $exePath -Destination $destination -Force
-          $sizeMB = [math]::Round((Get-Item $destination).Length / 1MB, 2)
-          Write-Host "Portable EXE ready: $destination ($sizeMB MB)"
-
-          git checkout -- src-tauri/Cargo.lock
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v6
-        with:
-          name: KOOK-windows-portable
-          path: output/windows/*.exe
-          retention-days: 7
-
-      - name: Publish GitHub Release
-        uses: ncipollo/release-action@v1
-        with:
-          tag: ${{ env.RELEASE_TAG }}
-          name: KOOK (portable, Claude auto-build)
-          body: |
-            Portable Pake build of KOOK for Windows. Drop `KOOK.exe` into any folder and run it directly — no installation needed.
-
-            Launches straight into `/app/channels/` so you skip the marketing landing page.
-
-            **Setup tip:** put it in your PATH-registered tools folder to launch from terminal.
-
-            **Requires:** Microsoft Edge WebView2 Runtime (preinstalled on Windows 10 21H2+ and Windows 11; if missing, install the evergreen bootstrapper from https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
-
-            ---
-            - Source URL: ${{ env.APP_URL }}
-            - Window size: ${{ env.APP_WIDTH }}x${{ env.APP_HEIGHT }}
-            - Flags: `--new-window` (login popups in-app; chat-shared external links still open in system browser)
-            - Built from commit ${{ github.sha }}
-            - Workflow run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          allowUpdates: true
-          replacesArtifacts: true
-          artifacts: "output/windows/*.exe"
-          token: ${{ secrets.GITHUB_TOKEN }}
+          app-name: kook
+          app-title: KOOK
+          app-url: https://www.kookapp.cn/app/channels/
+          app-width: "1280"
+          app-height: "820"
+          extra-flags: "--new-window"
+          release-tag: claude-kook-build
+          github-token: ${{ secrets.GITHUB_TOKEN }}
