@@ -27,7 +27,7 @@ inputs:
     description: "GitHub Release tag the .exe is published to."
     required: true
   github-token:
-    description: "Token used to publish the Release. Pass `${{ secrets.GITHUB_TOKEN }}`."
+    description: "Token used to publish the Release. Pass secrets.GITHUB_TOKEN from the calling workflow."
     required: true
 
 runs:

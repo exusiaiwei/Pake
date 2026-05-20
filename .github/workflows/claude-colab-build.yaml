@@ -1,3 +1,4 @@
+# Thin wrapper. All build logic lives in .github/actions/pake-windows-build/.
 name: Build Colab Windows (Claude)
 
 on:
