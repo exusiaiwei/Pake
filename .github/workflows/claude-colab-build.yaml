@@ -7,6 +7,8 @@ on:
       - claude/pake-exe-builder-evaluation-las7e
     paths:
       - ".github/workflows/claude-colab-build.yaml"
+      - "src-tauri/src/**"
+      - "src-tauri/Cargo.toml"
   workflow_dispatch:
 
 permissions:

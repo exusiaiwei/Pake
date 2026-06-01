@@ -29,6 +29,36 @@ fn build_proxy_browser_arg(url: &Url) -> Option<String> {
     }
 }
 
+/// Allow the .exe to be launched with a URL argument (e.g.
+/// `Colab.exe "https://colab.research.google.com/notebooks/empty.ipynb#mcpProxyToken=abc&mcpProxyPort=12345"`)
+/// and open that URL instead of the build-time-configured one. The full URL
+/// including its fragment is preserved by `url::Url` parsing, which is what
+/// integrations such as Colab MCP rely on.
+///
+/// Only same-origin overrides are accepted (scheme + host + port must match
+/// the configured URL). Different-origin args are silently ignored so a
+/// shortcut or another process can't trick the app into loading an arbitrary
+/// site.
+fn override_url_from_cli(configured_url: &str) -> Option<String> {
+    let configured = Url::parse(configured_url).ok()?;
+    for arg in std::env::args().skip(1) {
+        if !arg.starts_with("http://") && !arg.starts_with("https://") {
+            continue;
+        }
+        let candidate = match Url::parse(&arg) {
+            Ok(u) => u,
+            Err(_) => continue,
+        };
+        if candidate.scheme() == configured.scheme()
+            && candidate.host_str() == configured.host_str()
+            && candidate.port_or_known_default() == configured.port_or_known_default()
+        {
+            return Some(arg);
+        }
+    }
+    None
+}
+
 pub struct MultiWindowState {
     pub pake_config: PakeConfig,
     pub tauri_config: Config,
@@ -134,13 +164,12 @@ fn build_window_with_label(
     })?;
     let url = match window_config.url_type.as_str() {
         "web" => {
-            let parsed = window_config.url.parse().map_err(|err| {
+            let effective_url = override_url_from_cli(&window_config.url)
+                .unwrap_or_else(|| window_config.url.clone());
+            let parsed = effective_url.parse().map_err(|err| {
                 tauri::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    format!(
-                        "Invalid 'web' url '{}' in pake.json: {err}",
-                        window_config.url
-                    ),
+                    format!("Invalid 'web' url '{effective_url}' in pake.json: {err}"),
                 ))
             })?;
             WebviewUrl::App(parsed)
