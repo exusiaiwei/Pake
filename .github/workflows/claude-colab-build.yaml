@@ -33,5 +33,6 @@ jobs:
           app-width: "1280"
           app-height: "820"
           extra-flags: "--force-internal-navigation --new-window"
+          icon-url: "https://colab.research.google.com/img/colab_favicon_256px.png"
           release-tag: claude-colab-build
           github-token: ${{ secrets.GITHUB_TOKEN }}

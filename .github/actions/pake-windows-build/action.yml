@@ -26,6 +26,10 @@ inputs:
   release-tag:
     description: "GitHub Release tag the .exe is published to."
     required: true
+  icon-url:
+    description: "Optional URL to a PNG icon. When provided, the runner downloads it, converts to .ico (multi-resolution, 16/32/48/64/128/256), and places it at src-tauri/png/<app-name>_256.ico where the build step auto-picks it up. Skipped if empty."
+    required: false
+    default: ""
   github-token:
     description: "Token used to publish the Release. Pass secrets.GITHUB_TOKEN from the calling workflow."
     required: true
@@ -46,6 +50,36 @@ runs:
     - name: Build Pake CLI
       shell: pwsh
       run: pnpm run cli:build
+
+    - name: Fetch and convert app icon
+      if: inputs.icon-url != ''
+      shell: pwsh
+      env:
+        ICON_URL: ${{ inputs.icon-url }}
+        APP_NAME: ${{ inputs.app-name }}
+      run: |
+        $pngPath = "src-tauri\png\${env:APP_NAME}_source.png"
+        $icoPath = "src-tauri\png\${env:APP_NAME}_256.ico"
+
+        Write-Host "Fetching icon: $env:ICON_URL"
+        Invoke-WebRequest -Uri $env:ICON_URL -OutFile $pngPath -UseBasicParsing
+
+        $pngSize = (Get-Item $pngPath).Length
+        if ($pngSize -lt 1024) {
+          Write-Error "Downloaded icon is suspiciously small ($pngSize bytes); aborting."
+          exit 1
+        }
+        Write-Host "Downloaded $([math]::Round($pngSize / 1KB, 2)) KB"
+
+        # ImageMagick ships with windows-latest. Produce a multi-resolution .ico
+        # so Windows can pick the right size for taskbar / explorer / alt-tab.
+        magick $pngPath -define icon:auto-resize=256,128,64,48,32,16 $icoPath
+        if (-not (Test-Path $icoPath)) {
+          Write-Error "ImageMagick did not produce $icoPath"
+          exit 1
+        }
+
+        Write-Host "Generated $icoPath ($([math]::Round((Get-Item $icoPath).Length / 1KB, 2)) KB)"
 
     - name: Build ${{ inputs.app-title }}
       shell: pwsh
