@@ -1,0 +1,36 @@
+# Thin wrapper. All build logic lives in .github/actions/pake-windows-build/.
+name: Build ChatGPT Windows (Claude)
+
+on:
+  push:
+    branches:
+      - claude/pake-exe-builder-evaluation-las7e
+    paths:
+      - ".github/workflows/claude-chatgpt-build.yaml"
+      - "src-tauri/src/**"
+      - "src-tauri/Cargo.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: claude-chatgpt-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ChatGPT (Windows portable .exe)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/pake-windows-build
+        with:
+          app-name: chatgpt
+          app-title: ChatGPT
+          app-url: https://chatgpt.com/
+          app-width: "1200"
+          app-height: "780"
+          release-tag: claude-chatgpt-build
+          github-token: ${{ secrets.GITHUB_TOKEN }}

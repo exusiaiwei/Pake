@@ -1,0 +1,177 @@
+name: "Pake Windows Portable Build"
+description: "Build a Pake-wrapped web app as a portable Windows .exe and publish it to a GitHub Release."
+
+inputs:
+  app-name:
+    description: "Lowercase app identifier; used for the local icon lookup (src-tauri/png/<name>_256.ico) and matches pake mainBinaryName (pake-<name>.exe)."
+    required: true
+  app-title:
+    description: "Display name. Also used as the published .exe filename (`<title>.exe`)."
+    required: true
+  app-url:
+    description: "URL to package."
+    required: true
+  app-width:
+    description: "Initial window width."
+    required: false
+    default: "1200"
+  app-height:
+    description: "Initial window height."
+    required: false
+    default: "780"
+  extra-flags:
+    description: "Space-separated extra Pake CLI flags, e.g. '--new-window --force-internal-navigation'."
+    required: false
+    default: ""
+  release-tag:
+    description: "GitHub Release tag the .exe is published to."
+    required: true
+  icon-url:
+    description: "Optional URL to a PNG icon. When provided, the runner downloads it, converts to .ico (multi-resolution, 16/32/48/64/128/256), and places it at src-tauri/png/<app-name>_256.ico where the build step auto-picks it up. Skipped if empty."
+    required: false
+    default: ""
+  github-token:
+    description: "Token used to publish the Release. Pass secrets.GITHUB_TOKEN from the calling workflow."
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable-x86_64-msvc
+
+    - name: Setup Node.js Environment
+      uses: ./.github/actions/setup-env
+      with:
+        mode: build
+
+    - name: Build Pake CLI
+      shell: pwsh
+      run: pnpm run cli:build
+
+    - name: Fetch and convert app icon
+      if: inputs.icon-url != ''
+      shell: pwsh
+      env:
+        ICON_URL: ${{ inputs.icon-url }}
+        APP_NAME: ${{ inputs.app-name }}
+      run: |
+        $pngPath = "src-tauri\png\${env:APP_NAME}_source.png"
+        $icoPath = "src-tauri\png\${env:APP_NAME}_256.ico"
+
+        Write-Host "Fetching icon: $env:ICON_URL"
+        Invoke-WebRequest -Uri $env:ICON_URL -OutFile $pngPath -UseBasicParsing
+
+        $pngSize = (Get-Item $pngPath).Length
+        if ($pngSize -lt 1024) {
+          Write-Error "Downloaded icon is suspiciously small ($pngSize bytes); aborting."
+          exit 1
+        }
+        Write-Host "Downloaded $([math]::Round($pngSize / 1KB, 2)) KB"
+
+        # ImageMagick ships with windows-latest. Produce a multi-resolution .ico
+        # so Windows can pick the right size for taskbar / explorer / alt-tab.
+        magick $pngPath -define icon:auto-resize=256,128,64,48,32,16 $icoPath
+        if (-not (Test-Path $icoPath)) {
+          Write-Error "ImageMagick did not produce $icoPath"
+          exit 1
+        }
+
+        Write-Host "Generated $icoPath ($([math]::Round((Get-Item $icoPath).Length / 1KB, 2)) KB)"
+
+    - name: Build ${{ inputs.app-title }}
+      shell: pwsh
+      env:
+        APP_NAME: ${{ inputs.app-name }}
+        APP_TITLE: ${{ inputs.app-title }}
+        APP_URL: ${{ inputs.app-url }}
+        APP_WIDTH: ${{ inputs.app-width }}
+        APP_HEIGHT: ${{ inputs.app-height }}
+        EXTRA_FLAGS: ${{ inputs.extra-flags }}
+      run: |
+        $cliArgs = @(
+          "${env:APP_URL}",
+          "--name", "${env:APP_TITLE}",
+          "--width", "${env:APP_WIDTH}",
+          "--height", "${env:APP_HEIGHT}",
+          "--targets", "x64"
+        )
+
+        if ($env:EXTRA_FLAGS) {
+          foreach ($f in ($env:EXTRA_FLAGS -split '\s+' | Where-Object { $_ })) {
+            $cliArgs += $f
+          }
+        }
+
+        $iconPath = "src-tauri\png\${env:APP_NAME}_256.ico"
+        if (Test-Path $iconPath) {
+          $cliArgs += @("--icon", $iconPath)
+        }
+
+        Write-Host "Running: node dist/cli.js $cliArgs"
+        node dist/cli.js @cliArgs
+
+        New-Item -Path "output\windows" -ItemType Directory -Force | Out-Null
+
+        # Pake sets mainBinaryName = "pake-<lowercased-alnum-name>", so the raw
+        # Tauri binary lives at target/<triple>/release/pake-<name>.exe.
+        $releaseDir = "src-tauri\target\x86_64-pc-windows-msvc\release"
+        $primaryExe = Join-Path $releaseDir "pake-${env:APP_NAME}.exe"
+
+        $exePath = $null
+        if (Test-Path $primaryExe) {
+          $exePath = $primaryExe
+        } else {
+          $candidates = Get-ChildItem -Path $releaseDir -Filter "*.exe" -File -ErrorAction SilentlyContinue
+          $candidates = $candidates | Where-Object {
+            $_.Name -notmatch '^(build-script|.*-[0-9a-f]{16,})\.exe$'
+          }
+          if ($candidates) {
+            $exePath = $candidates[0].FullName
+          }
+        }
+
+        if (-not $exePath) {
+          Write-Error "Could not locate compiled .exe in $releaseDir"
+          Get-ChildItem -Path $releaseDir -Filter "*.exe" -File -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)  ($([math]::Round($_.Length / 1MB, 2)) MB)" }
+          exit 1
+        }
+
+        $destination = "output\windows\${env:APP_TITLE}.exe"
+        Copy-Item -Path $exePath -Destination $destination -Force
+        $sizeMB = [math]::Round((Get-Item $destination).Length / 1MB, 2)
+        Write-Host "Portable EXE ready: $destination ($sizeMB MB)"
+
+        git checkout -- src-tauri/Cargo.lock
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v6
+      with:
+        name: ${{ inputs.app-title }}-windows-portable
+        path: output/windows/*.exe
+        retention-days: 7
+
+    - name: Publish GitHub Release
+      uses: ncipollo/release-action@v1
+      with:
+        tag: ${{ inputs.release-tag }}
+        name: ${{ inputs.app-title }} (portable, Claude auto-build)
+        body: |
+          Portable Pake build of ${{ inputs.app-title }} for Windows. Drop `${{ inputs.app-title }}.exe` into any folder and run it directly — no installation needed.
+
+          **Setup tip:** put it in your PATH-registered tools folder to launch from terminal.
+
+          **Requires:** Microsoft Edge WebView2 Runtime (preinstalled on Windows 10 21H2+ and Windows 11; if missing, install the evergreen bootstrapper from https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
+
+          ---
+          - Source URL: ${{ inputs.app-url }}
+          - Window size: ${{ inputs.app-width }}x${{ inputs.app-height }}
+          - Extra flags: `${{ inputs.extra-flags }}`
+          - Built from commit ${{ github.sha }}
+          - Workflow run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        allowUpdates: true
+        replacesArtifacts: true
+        artifacts: "output/windows/*.exe"
+        token: ${{ inputs.github-token }}

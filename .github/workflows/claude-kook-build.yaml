@@ -1,0 +1,37 @@
+# Thin wrapper. All build logic lives in .github/actions/pake-windows-build/.
+name: Build KOOK Windows (Claude)
+
+on:
+  push:
+    branches:
+      - claude/pake-exe-builder-evaluation-las7e
+    paths:
+      - ".github/workflows/claude-kook-build.yaml"
+      - "src-tauri/src/**"
+      - "src-tauri/Cargo.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: claude-kook-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build KOOK (Windows portable .exe)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/pake-windows-build
+        with:
+          app-name: kook
+          app-title: KOOK
+          app-url: https://www.kookapp.cn/app/channels/
+          app-width: "1280"
+          app-height: "820"
+          extra-flags: "--new-window"
+          release-tag: claude-kook-build
+          github-token: ${{ secrets.GITHUB_TOKEN }}

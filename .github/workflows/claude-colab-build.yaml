@@ -1,0 +1,38 @@
+# Thin wrapper. All build logic lives in .github/actions/pake-windows-build/.
+name: Build Colab Windows (Claude)
+
+on:
+  push:
+    branches:
+      - claude/pake-exe-builder-evaluation-las7e
+    paths:
+      - ".github/workflows/claude-colab-build.yaml"
+      - "src-tauri/src/**"
+      - "src-tauri/Cargo.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: claude-colab-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Colab (Windows portable .exe)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/pake-windows-build
+        with:
+          app-name: colab
+          app-title: Colab
+          app-url: https://colab.research.google.com/
+          app-width: "1280"
+          app-height: "820"
+          extra-flags: "--force-internal-navigation --new-window"
+          icon-url: "https://colab.research.google.com/img/colab_favicon_256px.png"
+          release-tag: claude-colab-build
+          github-token: ${{ secrets.GITHUB_TOKEN }}
